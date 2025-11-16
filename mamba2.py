@@ -78,6 +78,8 @@ class Mamba2Simple(nn.Module):
 
         conv_dim = self.d_inner + 2 * self.ngroups * self.d_state
         
+        print(conv_dim)
+        
         
         # self.conv1d = BottleNeckKAGNConv1DLayer(
         #     input_dim=conv_dim,
@@ -96,7 +98,7 @@ class Mamba2Simple(nn.Module):
             padding=d_conv - 1,
         )
         
-        self.conv1d_kan_activation = FastKANLayer(1,1,use_layernorm=False)
+        self.conv1d_kan_activation = FastKANLayer(conv_dim*d_conv,conv_dim*d_conv)
         # if self.conv_init is not None:
         #     nn.init.uniform_(self.conv1d.weight, -self.conv_init, self.conv_init)
         # self.conv1d.weight._no_weight_decay = True
@@ -184,9 +186,9 @@ class Mamba2Simple(nn.Module):
                 xBC = self.conv1d(xBC.transpose(1, 2)).transpose(1, 2)
                 
                 orig_shape_xbc = xBC.shape
-                                
+                                                
                 xBC = xBC.flatten()
-                xBC = xBC.reshape(xBC.shape[0],1)
+                
                 xBC = self.conv1d_kan_activation(xBC)
                 
                 xBC = xBC.reshape(orig_shape_xbc)
