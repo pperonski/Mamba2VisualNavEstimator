@@ -105,7 +105,7 @@ class MapMemorizer(torch.nn.Module):
 
 def main():
     
-    net = MapMemorizer(30)
+    net = MapMemorizer(10)
     
     net = net.to(device=device)
     
@@ -133,15 +133,18 @@ def main():
         print(f"Time in: {end-start} s")
         
         
-    x = [torch.rand((32,16,8*8)).to(device=device),torch.rand((32,16,8*8)).to(device=device)] 
+    x = [] 
+    y = []
     
-    y = [torch.rand((32,16,8*8)).to(device=device),torch.rand((32,16,8*8)).to(device=device)*10.0]
+    for i in range(32):
+        x.append(torch.rand((32,16,8*8)).to(device=device))
+        y.append(torch.rand((32,16,8*8)).to(device=device))
     
     # Test train
     
     print("Test training")
     
-    net.fit(100,x,y)
+    net.fit(1000,x,y)
         
     input()
 
