@@ -79,14 +79,6 @@ class Mamba2Simple(nn.Module):
         conv_dim = self.d_inner + 2 * self.ngroups * self.d_state
                 
         
-        # self.conv1d = BottleNeckKAGNConv1DLayer(
-        #     input_dim=conv_dim,
-        #     output_dim=conv_dim,
-        #     kernel_size=d_conv,
-        #     groups=conv_dim,
-        #     padding=d_conv - 1
-        # )
-        
         self.conv1d = nn.Conv1d(
             in_channels=conv_dim,
             out_channels=conv_dim,

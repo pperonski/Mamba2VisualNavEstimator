@@ -1,6 +1,5 @@
 import torch
 from mamba2 import Mamba2Simple
-from convkan import ConvKAN, LayerNorm2D
 
 from timeit import default_timer as timer
 
@@ -26,7 +25,7 @@ class MapMemorizer(torch.nn.Module):
     def __init__(self,N:int, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
-        self.layers:list[Mamba2Simple] = []
+        layers:list[Mamba2Simple] = []
         
         for n in range(N):
             
@@ -38,23 +37,23 @@ class MapMemorizer(torch.nn.Module):
                     use_mem_eff_path=False
                 )
             
-            self.layers.append(layer)
+            layers.append(layer)
             
-        self.modules = torch.nn.ModuleList(self.layers)
+        self._layers = torch.nn.ModuleList(layers)
         
         
     def forward(self,x):
         
         with torch.no_grad():
-            for layer in self.layers:
+            for layer in self._layers[:-1]:
                 x = layer.forward(x)
         
-        return x
+        return self._layers[-1].forward(x)
     
     def fit(self,epoches:int,x,y):
         
         self.train(True)
-        
+                
         optimizer = torch.optim.AdamW(self.parameters(),lr=0.001)
         
         loss_fn = torch.nn.MSELoss()
@@ -68,25 +67,33 @@ class MapMemorizer(torch.nn.Module):
             mean_error = 0
             
             batch_size = 0
+            
+            with torch.set_grad_enabled(True):
         
-            for batch_id in range(batch_count):
-                _x = x[batch_id]
-                _y = y[batch_id]
-                
-                batch_size = _x.shape[0]
-                
-                optimizer.zero_grad()
-                
-                output = self.forward(_x)
-                
-                loss = loss_fn(output,_y)
-                # loss.requires_grad = True
-                                
-                loss.backward()
-                
-                mean_error += loss.item()
-                
-                optimizer.step()
+                for batch_id in range(batch_count):
+                    _x = x[batch_id]
+                    _y = y[batch_id]
+                    
+                    batch_size = _x.shape[0]
+                                        
+                    output = self.forward(_x)
+                    
+                    loss = loss_fn(output,_y)
+                    # loss.requires_grad = True
+                    # loss.retain_grad()
+                    
+                    # for param in self.parameters():
+                        # param.requires_grad = True
+                        # param.retain_grad()
+                        # print(param.is_leaf)
+                    
+                    optimizer.zero_grad()
+                                    
+                    loss.backward()
+                    
+                    mean_error += loss.item()
+                    
+                    optimizer.step()
 
             mean_error /= batch_size
         
@@ -98,30 +105,32 @@ class MapMemorizer(torch.nn.Module):
 
 def main():
     
-    net = MapMemorizer(30).to(device=device)
+    net = MapMemorizer(30)
     
-    # with torch.no_grad():
+    net = net.to(device=device)
     
-    #     _input = torch.rand((1,1,8*8)).to(device=device)
-    #     _input1 = torch.rand((1,1,8*8)).to(device=device)
+    with torch.no_grad():
+    
+        _input = torch.rand((1,1,8*8)).to(device=device)
+        _input1 = torch.rand((1,1,8*8)).to(device=device)
         
-    #     start = timer()
+        start = timer()
         
-    #     out = net(_input)
+        out = net(_input)
         
-    #     end = timer()
+        end = timer()
         
-    #     print(out.shape)
-    #     print(f"Time in: {end-start} s")
+        print(out.shape)
+        print(f"Time in: {end-start} s")
         
-    #     start = timer()
+        start = timer()
         
-    #     out = net(_input1)
+        out = net(_input1)
         
-    #     end = timer()
+        end = timer()
         
-    #     print(out.shape)
-    #     print(f"Time in: {end-start} s")
+        print(out.shape)
+        print(f"Time in: {end-start} s")
         
         
     x = [torch.rand((32,16,8*8)).to(device=device),torch.rand((32,16,8*8)).to(device=device)] 
