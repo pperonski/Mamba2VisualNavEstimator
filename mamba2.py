@@ -74,12 +74,10 @@ class Mamba2Simple(nn.Module):
         # Order: [z, x, B, C, dt]
         d_in_proj = 2 * self.d_inner + 2 * self.ngroups * self.d_state + self.nheads
         # self.in_proj = nn.Linear(self.d_model, d_in_proj, bias=bias, **factory_kwargs)
-        self.in_proj = FastKANLayer(self.d_model,d_in_proj)
+        self.in_proj = FastKANLayer(self.d_model,d_in_proj).to(device=device)
 
         conv_dim = self.d_inner + 2 * self.ngroups * self.d_state
-        
-        print(conv_dim)
-        
+                
         
         # self.conv1d = BottleNeckKAGNConv1DLayer(
         #     input_dim=conv_dim,
@@ -96,15 +94,15 @@ class Mamba2Simple(nn.Module):
             kernel_size=d_conv,
             groups=conv_dim,
             padding=d_conv - 1,
-        )
-        
-        self.conv1d_kan_activation = FastKANLayer(conv_dim*d_conv,conv_dim*d_conv)
+        ).to(device=device)
+                
+        self.conv1d_kan_activation = FastKANLayer(conv_dim,conv_dim)
         # if self.conv_init is not None:
         #     nn.init.uniform_(self.conv1d.weight, -self.conv_init, self.conv_init)
         # self.conv1d.weight._no_weight_decay = True
 
         if self.learnable_init_states:
-            self.init_states = nn.Parameter(torch.zeros(self.nheads, self.headdim, self.d_state))
+            self.init_states = nn.Parameter(torch.zeros(self.nheads, self.headdim, self.d_state),requires_grad=True)
             self.init_states._no_weight_decay = True
 
         # Initialize log dt bias
@@ -115,7 +113,7 @@ class Mamba2Simple(nn.Module):
         dt = torch.clamp(dt, min=dt_init_floor)
         # Inverse of softplus: https://github.com/pytorch/pytorch/issues/72759
         inv_dt = dt + torch.log(-torch.expm1(-dt))
-        self.dt_bias = nn.Parameter(inv_dt)
+        self.dt_bias = nn.Parameter(inv_dt,requires_grad=True)
         # Just to be explicit. Without this we already don't put wd on dt_bias because of the check
         # name.endswith("bias") in param_grouping.py
         self.dt_bias._no_weight_decay = True
@@ -124,12 +122,12 @@ class Mamba2Simple(nn.Module):
         assert A_init_range[0] > 0 and A_init_range[1] >= A_init_range[0]
         A = torch.empty(self.nheads, dtype=torch.float32, device=device).uniform_(*A_init_range)
         A_log = torch.log(A).to(dtype=dtype)
-        self.A_log = nn.Parameter(A_log)
+        self.A_log = nn.Parameter(A_log,requires_grad=True)
         # self.register_buffer("A_log", torch.zeros(self.nheads, dtype=torch.float32, device=device), persistent=True)
         self.A_log._no_weight_decay = True
 
         # D "skip" parameter
-        self.D = nn.Parameter(torch.ones(self.nheads, device=device))
+        self.D = nn.Parameter(torch.ones(self.nheads, device=device),requires_grad=True)
         self.D._no_weight_decay = True
 
         # Extra normalization layer right before output projection
@@ -182,13 +180,11 @@ class Mamba2Simple(nn.Module):
 
             # 1D Convolution
             if causal_conv1d_fn is None or self.activation not in ["silu", "swish"]:
-                                
+                                       
                 xBC = self.conv1d(xBC.transpose(1, 2)).transpose(1, 2)
                 
                 orig_shape_xbc = xBC.shape
-                                                
-                xBC = xBC.flatten()
-                
+                                                                                
                 xBC = self.conv1d_kan_activation(xBC)
                 
                 xBC = xBC.reshape(orig_shape_xbc)

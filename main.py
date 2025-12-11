@@ -20,43 +20,119 @@ Input image will have size of 224 x 224.
 
 '''
 
-head1 = Mamba2Simple(
-    d_model=32*32,
-    d_state=32,
-    d_conv=4,
-    expand=2,
-    use_mem_eff_path=False
-).to(device=device)
 
+class MapMemorizer(torch.nn.Module):
+    
+    def __init__(self,N:int, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+        self.layers:list[Mamba2Simple] = []
+        
+        for n in range(N):
+            
+            layer =  Mamba2Simple(
+                    d_model=8*8,
+                    d_state=32,
+                    d_conv=4,
+                    expand=2,
+                    use_mem_eff_path=False
+                )
+            
+            self.layers.append(layer)
+            
+        self.modules = torch.nn.ModuleList(self.layers)
+        
+        
+    def forward(self,x):
+        
+        with torch.no_grad():
+            for layer in self.layers:
+                x = layer.forward(x)
+        
+        return x
+    
+    def fit(self,epoches:int,x,y):
+        
+        self.train(True)
+        
+        optimizer = torch.optim.AdamW(self.parameters(),lr=0.001)
+        
+        loss_fn = torch.nn.MSELoss()
+        
+        mean_error = 0
+        
+        batch_count:int = len(x)
+                
+        for i in range(epoches):
+            
+            mean_error = 0
+            
+            batch_size = 0
+        
+            for batch_id in range(batch_count):
+                _x = x[batch_id]
+                _y = y[batch_id]
+                
+                batch_size = _x.shape[0]
+                
+                optimizer.zero_grad()
+                
+                output = self.forward(_x)
+                
+                loss = loss_fn(output,_y)
+                # loss.requires_grad = True
+                                
+                loss.backward()
+                
+                mean_error += loss.item()
+                
+                optimizer.step()
 
-torch.save(head1.state_dict(),"mamaba.pt")
+            mean_error /= batch_size
+        
+            print(f"Epoch: {i+1} loss: {mean_error}")
+            
+        self.train(False)
 
+            
 
 def main():
     
-    with torch.no_grad():
+    net = MapMemorizer(30).to(device=device)
     
-        _input = torch.rand((1,1,32*32)).to(device=device)
-        _input1 = torch.rand((1,1,32*32)).to(device=device)
+    # with torch.no_grad():
+    
+    #     _input = torch.rand((1,1,8*8)).to(device=device)
+    #     _input1 = torch.rand((1,1,8*8)).to(device=device)
+        
+    #     start = timer()
+        
+    #     out = net(_input)
+        
+    #     end = timer()
+        
+    #     print(out.shape)
+    #     print(f"Time in: {end-start} s")
+        
+    #     start = timer()
+        
+    #     out = net(_input1)
+        
+    #     end = timer()
+        
+    #     print(out.shape)
+    #     print(f"Time in: {end-start} s")
         
         
-        start = timer()
-        
-        out = head1(_input)
-        
-        end = timer()
-        
-        print(out.shape)
-        print(f"Time in: {end-start} s")
-        
-        start = timer()
-        
-        out = head1(_input1)
-        
-        end = timer()
-        
-        print(out.shape)
-        print(f"Time in: {end-start} s")
+    x = [torch.rand((32,16,8*8)).to(device=device),torch.rand((32,16,8*8)).to(device=device)] 
+    
+    y = [torch.rand((32,16,8*8)).to(device=device),torch.rand((32,16,8*8)).to(device=device)*10.0]
+    
+    # Test train
+    
+    print("Test training")
+    
+    net.fit(100,x,y)
         
     input()
 
