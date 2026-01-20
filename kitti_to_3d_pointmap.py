@@ -2,9 +2,11 @@ import sys
 import numpy as np
 import os
 import pickle
+import time
 
-from scipy.spatial import cKDTree
+import open3d as o3d
 
+from threading import Thread,Lock
 
 class Position:
     def __init__(self):
@@ -36,10 +38,10 @@ class Position:
         self._position[1] = y
         self._position[2] = z
         
-        self._orientation[0] = q1
-        self._orientation[1] = q2
-        self._orientation[2] = q3
-        self._orientation[3] = q4
+        self._orientation[0] = q4
+        self._orientation[1] = q1
+        self._orientation[2] = q2
+        self._orientation[3] = q3
 
 def rotate_point_numpy(point, quaternion):
     """
@@ -58,6 +60,19 @@ def rotate_point_numpy(point, quaternion):
     v_rotated = point + w * t + np.cross(vec_q, t)
     
     return v_rotated
+
+def quaternion_to_matrix(q):
+    w, x, y, z = q
+    # Pre-calculate products
+    x2, y2, z2 = x*x, y*y, z*z
+    xy, xz, yz = x*y, x*z, y*z
+    wx, wy, wz = w*x, w*y, w*z
+
+    return np.array([
+        [1 - 2*(y2 + z2),     2*(xy - wz),     2*(xz + wy)],
+        [2*(xy + wz),     1 - 2*(x2 + z2),     2*(yz - wx)],
+        [2*(xz - wy),         2*(yz + wx), 1 - 2*(x2 + y2)]
+    ])
 
 def main():
     # timestamp 
@@ -109,35 +124,76 @@ def main():
             positions.append(pos)
                 
     print(f"Readed {len(positions)} of positions.")
-            
-    points = []
+    
+    vis = o3d.visualization.Visualizer()
+    vis.create_window(height=800, width=600)
+    
+    BORDER_SIZE = 100 #2**32-1
+    
+    
+    pcd = o3d.geometry.PointCloud()
+    # pcd.points = o3d.utility.Vector3dVector(np.array(border_points))
+        
+    # pcd = o3d.io.read_point_cloud("point_cloud.ply",format="ply",print_progress=True,remove_nan_points=True,remove_infinite_points=True)
+    # # pcd.colors = o3d.utility.Vector3dVector(np.ones((len(pcd.points),3)))
+    
+    # bbox = o3d.geometry.AxisAlignedBoundingBox()
+    
+    # bbox.max_bound = np.array([1e16,1e16,1e16])
+    # bbox.min_bound = np.array([-1e16,-1e16,-1e16])
+    
+    # pcd = pcd.crop(bbox)
+    
+   
+    
+    # o3d.visualization.draw_geometries([pcd])
+    
+    limits = o3d.geometry.AxisAlignedBoundingBox()
+    limits.max_bound = np.ones(3)*10
+    limits.min_bound = np.ones(3)*-10
     
     try:
         # render cloud map
         for i,(points_file,position) in enumerate(zip(cloud_files,positions)):
             cloud_numpy = np.fromfile(os.path.join(lidar_path,points_file), dtype=cloud_converer_type)
             # it is structured numpy array 
+            cloud_points = o3d.geometry.PointCloud()
+            points = []
+                        
             print(f"Cloud: {i}")
             for point in cloud_numpy:
                 
+                if point['intensity'] <= 10:
+                    continue
+                                
                 p = np.array([point['x'],point['y'],point['z']],dtype=np.float32)
-                
-                p = rotate_point_numpy(p,position._orientation)
-                p += position._position
                                 
                 if not np.isnan(np.sum(p)) and not np.isinf(np.sum(p)):
-                    if len(points) == 0:
-                        points.append(p)
-                    else:
-                        tree = cKDTree(points)
-                        
-                        dist, index = tree.query(p)
-                        
-                        if dist >=  0.001:
-                            points.append(p)
+                    points.append(p)
+            
+            cloud_points.points = o3d.utility.Vector3dVector(np.array(points))
+            rot_matrix = quaternion_to_matrix(position._orientation)
+            cloud_points = cloud_points.rotate(R=rot_matrix,center=np.zeros(3))
+            cloud_points = cloud_points.translate(position._position)
+            
+            pcd.points.extend(cloud_points.points)
+            
+            pcd = pcd.crop(limits)
+            
+            # if i % 10 == 0:
+            #     pcd = pcd.remove_duplicated_points()
                             
     except KeyboardInterrupt:
         pass
+        
+    vis.add_geometry(pcd)
+    
+    o3d.io.write_point_cloud("point_cloud.ply", pcd)
+        
+    while True:
+        vis.poll_events()
+        vis.update_renderer()
+        time.sleep(0.01)
     
     points = np.array(points,dtype=np.float32)
     
