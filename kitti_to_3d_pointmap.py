@@ -149,8 +149,8 @@ def main():
     # o3d.visualization.draw_geometries([pcd])
     
     limits = o3d.geometry.AxisAlignedBoundingBox()
-    limits.max_bound = np.ones(3)*10
-    limits.min_bound = np.ones(3)*-10
+    limits.max_bound = np.ones(3)*100
+    limits.min_bound = np.ones(3)*-100
     
     try:
         # render cloud map
@@ -163,10 +163,19 @@ def main():
             print(f"Cloud: {i}")
             for point in cloud_numpy:
                 
-                if point['intensity'] <= 10:
+                if point['intensity'] <= 5 or point['range'] >= 1000000:
                     continue
                                 
                 p = np.array([point['x'],point['y'],point['z']],dtype=np.float32)
+                
+                # if abs(point['x']) < 0.1 and abs(point['y']) < 0.1 and abs(point['z']) >= 0.1:
+                #     continue
+                
+                # if abs(point['z']) < 0.1 and abs(point['y']) < 0.1 and abs(point['x']) >= 0.1:
+                #     continue
+                
+                # if abs(point['x']) < 0.1 and abs(point['z']) < 0.1 and abs(point['y']) >= 0.1:
+                #     continue
                                 
                 if not np.isnan(np.sum(p)) and not np.isinf(np.sum(p)):
                     points.append(p)
