@@ -3,6 +3,7 @@ import numpy as np
 import os
 import pickle
 import time
+import laspy
 
 import open3d as o3d
 
@@ -128,6 +129,8 @@ def main():
     vis = o3d.visualization.Visualizer()
     vis.create_window(height=800, width=600)
     
+    vis.get_render_option().point_size = 3.0
+    
     BORDER_SIZE = 100 #2**32-1
     
     
@@ -149,8 +152,19 @@ def main():
     # o3d.visualization.draw_geometries([pcd])
     
     limits = o3d.geometry.AxisAlignedBoundingBox()
-    limits.max_bound = np.ones(3)*100
-    limits.min_bound = np.ones(3)*-100
+    limits.max_bound = np.array([17.5,17.5,10])
+    limits.min_bound = np.array([-17.5,-17.5,-10])
+    
+    limits1 = o3d.geometry.AxisAlignedBoundingBox()
+    limits1.max_bound = np.ones(3)*1.0
+    limits1.min_bound = np.ones(3)*-1.0
+    
+    max_intensity = 0
+    min_intensity = 2**32
+    
+    view_limits = o3d.geometry.AxisAlignedBoundingBox()
+    view_limits.max_bound = np.ones(3)*10.0
+    view_limits.min_bound = np.ones(3)*-10.0
     
     try:
         # render cloud map
@@ -163,37 +177,59 @@ def main():
             print(f"Cloud: {i}")
             for point in cloud_numpy:
                 
-                if point['intensity'] <= 5 or point['range'] >= 1000000:
+                if point['range'] > max_intensity:
+                    max_intensity=point['range'] 
+                if point['range'] < min_intensity:
+                    min_intensity=point['range'] 
+                
+                if point['intensity'] <= 0 or point['intensity'] >= 1000 \
+                    or np.isinf(point['intensity']) or np.isnan(point['intensity']) or point['range'] >= 30000000:
                     continue
                                 
                 p = np.array([point['x'],point['y'],point['z']],dtype=np.float32)
                 
-                # if abs(point['x']) < 0.1 and abs(point['y']) < 0.1 and abs(point['z']) >= 0.1:
-                #     continue
-                
-                # if abs(point['z']) < 0.1 and abs(point['y']) < 0.1 and abs(point['x']) >= 0.1:
-                #     continue
-                
-                # if abs(point['x']) < 0.1 and abs(point['z']) < 0.1 and abs(point['y']) >= 0.1:
-                #     continue
+                if abs(p[0]) < 0.1:
+                    continue
+                if abs(p[1]) < 0.1:
+                    continue
+                if abs(p[2]) < 0.1:
+                    continue
                                 
                 if not np.isnan(np.sum(p)) and not np.isinf(np.sum(p)):
                     points.append(p)
+                    
+            points = np.array(points)
             
-            cloud_points.points = o3d.utility.Vector3dVector(np.array(points))
-            rot_matrix = quaternion_to_matrix(position._orientation)
-            cloud_points = cloud_points.rotate(R=rot_matrix,center=np.zeros(3))
-            cloud_points = cloud_points.translate(position._position)
+            # Filter points out of 90 degress lidar Vertical FOV
+            radiuses = np.sqrt(points[:,0]*points[:,0] + points[:,1]*points[:,1])
+            angles = np.arctan2(points[:,2],radiuses)
+            point_filters = abs(angles) <= ( np.pi/4 ) 
+                        
+            points = points[point_filters]
             
+            cloud_points.points = o3d.utility.Vector3dVector(points)
+            cloud_points = cloud_points.crop(limits)
+            
+            rot_matrix = o3d.geometry.PointCloud.get_rotation_matrix_from_quaternion(position._orientation)
+            cloud_points.rotate(R=rot_matrix,center=np.zeros(3))
+            cloud_points.translate(position._position)        
+                
             pcd.points.extend(cloud_points.points)
             
-            pcd = pcd.crop(limits)
-            
             # if i % 10 == 0:
-            #     pcd = pcd.remove_duplicated_points()
                             
     except KeyboardInterrupt:
         pass
+    
+    pcd.remove_non_finite_points()
+    pcd = pcd.remove_duplicated_points()
+    cl, ind = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
+    pcd = pcd.select_by_index(ind)
+    
+    pcd.crop(view_limits)
+    
+    print(f"Max intensity: {max_intensity}")
+    print(f"Min intensity: {min_intensity}")
         
     vis.add_geometry(pcd)
     
