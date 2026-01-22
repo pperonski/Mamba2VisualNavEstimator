@@ -183,7 +183,7 @@ def main():
                     min_intensity=point['range'] 
                 
                 if point['intensity'] <= 0 or point['intensity'] >= 1000 \
-                    or np.isinf(point['intensity']) or np.isnan(point['intensity']) or point['range'] >= 30000000:
+                    or np.isinf(point['intensity']) or np.isnan(point['intensity']) or point['range'] >= 42500000:
                     continue
                                 
                 p = np.array([point['x'],point['y'],point['z']],dtype=np.float32)
@@ -226,43 +226,20 @@ def main():
     cl, ind = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
     pcd = pcd.select_by_index(ind)
     
-    pcd.crop(view_limits)
+    # pcd.crop(view_limits)
     
     print(f"Max intensity: {max_intensity}")
     print(f"Min intensity: {min_intensity}")
         
     vis.add_geometry(pcd)
     
-    o3d.io.write_point_cloud("point_cloud.ply", pcd)
+    o3d.io.write_point_cloud("point_cloud_1.ply", pcd)
         
     while True:
         vis.poll_events()
         vis.update_renderer()
         time.sleep(0.01)
-    
-    points = np.array(points,dtype=np.float32)
-    
-    print(points.shape)
-    print(points)
-    
-    np.save("points",points)
-    
-    maxes = np.max(points,axis=0)
-    mins = np.min(points,axis=0)
-    
-    print(f"Max x: {maxes[0]}, y: {maxes[1]}, z: {maxes[2]}")
-    print(f"Min x: {mins[0]}, y: {mins[1]}, z: {mins[2]}")
-    
-    print(points.shape)
-    
-    
-            
-            
-            
-    
-    
-    
-    
+
 
 if __name__ == "__main__":
     main()
