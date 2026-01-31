@@ -62,6 +62,8 @@ class DatasetMemorizer:
         
         self.map_to_memorize = self.map_to_memorize.reshape((-1,1024))
         
+        self.map_to_memorize = self.map_to_memorize[:int(self.map_to_memorize.shape[0]/8),:]
+        
     def batch_size(self):
         return self._batch_size
                 
@@ -144,6 +146,7 @@ class MapMemorizer(torch.nn.Module):
                     
                     _x = x.to(device=device)
                     _y = y.to(device=device)
+                    print("y shape:",_y.shape)
                                                             
                     output = self._forward(_x)
                     
@@ -156,6 +159,8 @@ class MapMemorizer(torch.nn.Module):
                         output = torch.cat([output,_out],dim=1)
                         
                     output = self._layers[-1].forward(output)
+                    
+                    output = output[:,:_y.shape[0],:]
                     
                     print(output.shape,_y.shape)
                     
@@ -215,7 +220,7 @@ def main():
     
     # test split points
     
-    dataset = DatasetMemorizer("dataset")
+    dataset = DatasetMemorizer("dataset",batch_size=1)
     
     batch = dataset[0]
     
