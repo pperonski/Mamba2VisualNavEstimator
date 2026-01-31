@@ -23,8 +23,6 @@ from mamba_ssm.ops.triton.ssd_combined import mamba_split_conv1d_scan_combined
 from efficient_kan import KANLinear
 from fastkan import FastKANLayer
 
-from torch_conv_kan.kan_convs.kan_conv import KANConv1DLayer
-from torch_conv_kan.kan_convs.kagn_bottleneck_conv import BottleNeckKAGNConv1DLayer
 
 
 class Mamba2Simple(nn.Module):
