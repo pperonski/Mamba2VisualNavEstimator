@@ -75,8 +75,13 @@ def quaternion_to_matrix(q):
         [2*(xz - wy),         2*(yz + wx), 1 - 2*(x2 + y2)]
     ])
 
-def main():
+def main():    
     # timestamp 
+    pcd = o3d.geometry.PointCloud()
+    pcd = o3d.io.read_point_cloud("point_cloud_1.ply")
+    
+    o3d.visualization.draw_geometries([pcd])
+    exit()
     
     recordings_path = sys.argv[1]
         
@@ -133,24 +138,13 @@ def main():
     
     BORDER_SIZE = 100 #2**32-1
     
-    
     pcd = o3d.geometry.PointCloud()
+    pcd = o3d.io.load_point_cloud("point_cloud_1")
+    
+    o3d.draw_geometries([pcd])
+    exit()
     # pcd.points = o3d.utility.Vector3dVector(np.array(border_points))
-        
-    # pcd = o3d.io.read_point_cloud("point_cloud.ply",format="ply",print_progress=True,remove_nan_points=True,remove_infinite_points=True)
-    # # pcd.colors = o3d.utility.Vector3dVector(np.ones((len(pcd.points),3)))
-    
-    # bbox = o3d.geometry.AxisAlignedBoundingBox()
-    
-    # bbox.max_bound = np.array([1e16,1e16,1e16])
-    # bbox.min_bound = np.array([-1e16,-1e16,-1e16])
-    
-    # pcd = pcd.crop(bbox)
-    
-   
-    
-    # o3d.visualization.draw_geometries([pcd])
-    
+            
     limits = o3d.geometry.AxisAlignedBoundingBox()
     limits.max_bound = np.array([17.5,17.5,10])
     limits.min_bound = np.array([-17.5,-17.5,-10])
