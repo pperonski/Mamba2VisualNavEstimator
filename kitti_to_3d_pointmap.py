@@ -80,6 +80,12 @@ def main():
     pcd = o3d.geometry.PointCloud()
     pcd = o3d.io.read_point_cloud("point_cloud_1.ply")
     
+    pcd.points = pcd.points[0::256]
+    
+    print(f"Point count: {len(pcd.points)}")
+    
+    o3d.io.write_point_cloud("point_cloud_2.ply",pcd)
+    
     o3d.visualization.draw_geometries([pcd])
     exit()
     

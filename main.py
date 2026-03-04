@@ -14,6 +14,8 @@ import open3d as o3d
 
 from tqdm import tqdm
 
+from kitti_to_3d_pointmap import Position
+
 device = torch.device("cuda")
 
 
@@ -301,6 +303,7 @@ def convert_point_cloud_into_numpy_points_set(cloud:o3d.geometry.PointCloud):
     points_set.append((0.0,0.0,0.0,255.0))
 
     points_set = np.array(points_set,dtype=np.float32)
+    print(f"Cloud amount: {points_set.shape[0]}")
 
     return points_set
 
@@ -319,9 +322,52 @@ def read_and_parse_images(image_dir:str,target_dir:str):
 
         np.save(f"{target_dir}/img_{i}.npy",image)
 
+def generate_dataset(dataset_path,timestamp_file_path,image_dir):
+    
+    if not os.path.exists(dataset_path):
+        os.mkdir(dataset_path)
+        
+    if not os.path.exists(f"{dataset_path}/clouds"):
+        os.mkdir(f"{dataset_path}/clouds")
+        
+    if not os.path.exists(f"{dataset_path}/img"):
+        os.mkdir(f"{dataset_path}/img")
+        
+    read_and_parse_images(image_dir,f"{dataset_path}/img")
+    
+    pcd = o3d.io.read_point_cloud('point_cloud_2.ply')
+    
+    view_limits = o3d.geometry.AxisAlignedBoundingBox()
+    view_limits.max_bound = np.ones(3)*10.0
+    view_limits.min_bound = np.ones(3)*-10.0
+    
+    positions = []
+    
+    with open(timestamp_file_path) as file:
+        lines = file.readlines()
+        
+        for line in lines:
+            if line[0] == '#':
+                continue
+            pos = Position()
+            pos.read_from_line(line)
+            positions.append(pos)
 
-def main():
+    for i,pos in enumerate(positions):
+        
+        _pos = pos._position
+        
+        _view_limits = o3d.geometry.AxisAlignedBoundingBox()
+        _view_limits.max_bound = view_limits.max_bound + _pos  
+        _view_limits.min_bound = view_limits.min_bound + _pos  
+        
+        _cloud = pcd.crop(_view_limits)
+        
+        _point_cloud = convert_point_cloud_into_numpy_points_set(_cloud)
+        
+        np.save(f"{dataset_path}/clouds/cloud_{i}.npy",_point_cloud)
 
+def main():    
     torch.cuda.empty_cache()
 
     print("Processes count: ",os.cpu_count())
