@@ -4,3 +4,4 @@ __pycache__
 *.ply
 dataset
 dataset*
+training

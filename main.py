@@ -1,7 +1,7 @@
 import torch
 from fastkan import FastKANLayer
 from mamba2 import Mamba2Simple
-from concurrent.futures import ProcessPoolExecutor
+from kitti_to_3d_pointmap import Position
 
 from timeit import default_timer as timer
 from pathlib import Path
@@ -11,10 +11,9 @@ import os
 import cv2
 
 import open3d as o3d
+from chamferdist import ChamferDistance
 
 from tqdm import tqdm
-
-from kitti_to_3d_pointmap import Position
 
 device = torch.device("cuda")
 
@@ -41,7 +40,7 @@ class DatasetMemorizer:
         files = os.listdir(self.image_dir)
 
         files = sorted(files)
-        
+
         self.batches_count = int(( len(files)*64 )/batch_size)
 
         # Split files into batches
@@ -105,7 +104,7 @@ class DatasetMemorizer:
         files = sorted(files,key=lambda x: int(Path(x).stem.split('_')[1]))
         for f in files:
           cloud = np.load(f"{cloud_dir}/{dir}/{f}")
-          cloud = DatasetMemorizer.padd(cloud).reshape((-1,1024))
+          cloud = cloud.reshape((-1,4))[:,:3]
           clouds.append(cloud)
         return clouds
 
@@ -116,7 +115,7 @@ class DatasetMemorizer:
 
         if idx in self.batch_cache.keys():
           return self.batch_cache[idx]
-      
+
         file_idx = int( ( idx*self._batch_size ) / 64)
 
         file_batch = self.img_batches[file_idx]
@@ -139,23 +138,23 @@ class DatasetMemorizer:
         max_cloud_dim=max(clouds,key=lambda x: x.shape[0]).shape[0]
 
         def pad_cloud(x):
-          n_x = np.zeros((int(max_cloud_dim),1024),dtype=np.float32)
+          n_x = np.zeros((int(max_cloud_dim),3),dtype=np.float32)
 
           n_x[:x.shape[0],:] = x
 
           return n_x
-      
+
         cloud_orig_len = [cloud.shape[0] for cloud in clouds]
 
         clouds = [pad_cloud(cloud) for cloud in clouds]
-        
+
         to_split = int(len(clouds)/self._batch_size)
-        
+
         for i in range(to_split):
-            
+
             start = i*self._batch_size
             end = start + self._batch_size
-            
+
             _images = images[start:end]
             _clouds = clouds[start:end]
 
@@ -164,53 +163,69 @@ class DatasetMemorizer:
 
             image_batch = torch.tensor(_images,dtype=torch.float32)
             cloud_batch = torch.tensor(_clouds,dtype=torch.float32)
-        
+
             self.batch_cache[idx+i] = (image_batch,cloud_batch,cloud_orig_len[start:end])
 
         return self.batch_cache[idx]
 
+class MambaResidualLayer(torch.nn.Module):
+  def __init__(self,N:int, *args, **kwargs):
+      super().__init__(*args, **kwargs)
+      self.layers:list[Mamba2Simple] = []
+      self.norms:list[torch.nn.RMSNorm] = []
+
+      for n in range(N):
+          layer =  Mamba2Simple(
+                  d_model=8*8,
+                  d_state=128,
+                  d_conv=4,
+                  expand=2,
+                  use_mem_eff_path=False,
+                  device=device
+              )
+
+          self.layers.append(layer)
+          # self.norms.append(torch.nn.RMSNorm(8*8))
+
+          self._layers = torch.nn.ModuleList([*self.layers,*self.norms])
+
+  def forward(self,x):
+    for layer in self.layers[:-1]:
+          # x = norm(x)
+          x = layer.forward(x) + x
+
+    return self.layers[-1].forward(x) + x
 
 class MapMemorizer(torch.nn.Module):
 
     def __init__(self,N:int, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        layers:list[Mamba2Simple] = []
-        norms:list[torch.nn.RMSNorm] = []
+        layers:list[MambaResidualLayer] = []
 
         for n in range(N):
 
-            layer =  Mamba2Simple(
-                    d_model=8*8,
-                    d_state=32,
-                    d_conv=4,
-                    expand=2,
-                    use_mem_eff_path=False,
-                    device=device
+            layer =  MambaResidualLayer(
+                    15
                 )
 
             layers.append(layer)
-            
-            norms.append(
-                torch.nn.RMSNorm(64)
-            )
 
-        self.projection_point_layer = FastKANLayer(64,1024)
+        self.linear1 = FastKANLayer(64,32)
+        self.linear2 = FastKANLayer(32,16)
+        self.linear3 = FastKANLayer(16,8)
+        self.projection_point_layer = FastKANLayer(8,3)
         self.layers = layers
-        self.norms = norms
 
-        self._layers = torch.nn.ModuleList([*layers,*norms,self.projection_point_layer])
+        self._layers = torch.nn.ModuleList([*layers,self.linear1,self.linear2,self.linear3,self.projection_point_layer])
 
 
     def _forward(self,x):
+        y = 0
+        for layer in self.layers:
+            y += layer.forward(x)
 
-        for layer,norm in zip(self.layers[:-2],self.norms[:-2]):
-            x = norm(x)
-            x = layer.forward(x) + x
-
-        x = self.norms[-2](x)
-        
-        return self.layers[-2].forward(x) + x
+        return y
 
     def forward(self,x):
         '''
@@ -218,16 +233,25 @@ class MapMemorizer(torch.nn.Module):
         of normalized image 224 x 224
         split into 8x8 chunks
         '''
-
-        return self._layers[-1].forward(self._forward(x))
+        
+        x = self._forward(x)
+        
+        return self.projection_point_layer.forward(
+                    self.linear3(
+                        self.linear2(
+                            self.linear1(x)
+                          )
+                        )
+                    )
 
     def fit(self,epoches:int,dataset:DatasetMemorizer,checkpoint_path:str):
 
         self.train(True)
 
-        optimizer = torch.optim.AdamW(self.parameters(),lr=0.000001,betas=(0.9,0.9))
+        optimizer = torch.optim.AdamW(self.parameters(),lr=0.0001,betas=(0.9,0.9))
 
-        loss_fn = torch.nn.MSELoss()
+        # loss_fn = torch.nn.HuberLoss()
+        loss_fn = ChamferDistance()
 
         best_error = 10**9
 
@@ -240,29 +264,35 @@ class MapMemorizer(torch.nn.Module):
             for x,y,y_len in tqdm(dataset):
 
                 optimizer.zero_grad()
-                
+
                 _x = x.to(device=device)
                 _y = y.to(device=device)
-                
+
                 output = self._forward(_x)
 
                 while output.shape[1] < _y.shape[1]:
-                    
+
                     _x = torch.cat([_x,output],dim=1)
 
                     # output = self._forward(_x)
-                    
+
                     output = torch.cat([output,self._forward(_x)],dim=1)
 
                     # output = torch.cat([output,_out],dim=1)
-                                
-                output = self._layers[-1].forward(output)
 
-                loss = 0
+                output = self.projection_point_layer.forward(
+                    self.linear3(
+                        self.linear2(
+                            self.linear1(output)
+                          )
+                        )
+                    )
 
-                for o in range(output.shape[0]):
-                    l = y_len[o]
-                    loss += loss_fn(output[o:o+1,:l,:],_y[o:o+1,:l,:])
+                loss = loss_fn(output,_y)+loss_fn(_y,out)
+
+                # for o in range(output.shape[0]):
+                #     l = y_len[o]
+                #     loss += loss_fn(output[o:o+1,:l,:],_y[o:o+1,:l,:])
 
                 loss.backward()
 
@@ -286,6 +316,21 @@ class MapMemorizer(torch.nn.Module):
             print(f"Epoch: {i+1} loss: {mean_error}")
 
         self.train(False)
+        
+def read_and_parse_images(image_dir:str,target_dir:str):
+
+    if not os.path.exists(target_dir):
+        os.mkdir(target_dir)
+
+    for i,file in enumerate(os.listdir(image_dir)):
+        img = cv2.imread(f"{image_dir}/{file}")
+
+        img_resize = cv2.resize(img,(224,224))
+        image_rgb = cv2.cvtColor(img_resize, cv2.COLOR_BGR2RGB)
+
+        image = image_rgb.reshape((-1,8,8))
+
+        np.save(f"{target_dir}/img_{i}.npy",image)
 
 def convert_point_cloud_into_numpy_points_set(cloud:o3d.geometry.PointCloud):
     """
@@ -301,6 +346,26 @@ def convert_point_cloud_into_numpy_points_set(cloud:o3d.geometry.PointCloud):
         )
 
     points_set.append((0.0,0.0,0.0,255.0))
+
+    points_set = np.array(points_set,dtype=np.float32)
+    print(f"Cloud amount: {points_set.shape[0]}")
+
+    return points_set
+
+def convert_point_cloud_into_numpy_points_set_simple(cloud:o3d.geometry.PointCloud):
+    """
+    Docstring for convert_point_cloud_into_numpy_points_set
+
+    """
+
+    points_set = []
+
+    for point in cloud.points:
+        points_set.append(
+            (point[0],point[1],point[2])
+        )
+
+    points_set.append((0.0,0.0,0.0))
 
     points_set = np.array(points_set,dtype=np.float32)
     print(f"Cloud amount: {points_set.shape[0]}")
@@ -335,7 +400,7 @@ def generate_dataset(dataset_path,timestamp_file_path,image_dir):
         
     read_and_parse_images(image_dir,f"{dataset_path}/img")
     
-    pcd = o3d.io.read_point_cloud('point_cloud_2.ply')
+    pcd = o3d.io.read_point_cloud('point_cloud_3.ply')
     
     view_limits = o3d.geometry.AxisAlignedBoundingBox()
     view_limits.max_bound = np.ones(3)*10.0
@@ -366,15 +431,62 @@ def generate_dataset(dataset_path,timestamp_file_path,image_dir):
         _point_cloud = convert_point_cloud_into_numpy_points_set(_cloud)
         
         np.save(f"{dataset_path}/clouds/cloud_{i}.npy",_point_cloud)
+        
+def generate_dataset_simple(dataset_path,timestamp_file_path,image_dir):
+    
+    if not os.path.exists(dataset_path):
+        os.mkdir(dataset_path)
+        
+    if not os.path.exists(f"{dataset_path}/clouds"):
+        os.mkdir(f"{dataset_path}/clouds")
+        
+    if not os.path.exists(f"{dataset_path}/img"):
+        os.mkdir(f"{dataset_path}/img")
+        
+    read_and_parse_images(image_dir,f"{dataset_path}/img")
+    
+    pcd = o3d.io.read_point_cloud('point_cloud_3.ply')
+    
+    view_limits = o3d.geometry.AxisAlignedBoundingBox()
+    view_limits.max_bound = np.ones(3)*10.0
+    view_limits.min_bound = np.ones(3)*-10.0
+    
+    positions = []
+    
+    with open(timestamp_file_path) as file:
+        lines = file.readlines()
+        
+        for line in lines:
+            if line[0] == '#':
+                continue
+            pos = Position()
+            pos.read_from_line(line)
+            positions.append(pos)
+
+    for i,pos in enumerate(positions):
+        
+        _pos = pos._position
+        
+        _view_limits = o3d.geometry.AxisAlignedBoundingBox()
+        _view_limits.max_bound = view_limits.max_bound + _pos  
+        _view_limits.min_bound = view_limits.min_bound + _pos  
+        
+        _cloud = pcd.crop(_view_limits)
+        
+        _point_cloud = convert_point_cloud_into_numpy_points_set_simple(_cloud)
+        
+        np.save(f"{dataset_path}/clouds/cloud_{i}.npy",_point_cloud)
 
 def main():    
     torch.cuda.empty_cache()
 
     print("Processes count: ",os.cpu_count())
 
-    # test split points
-
-    dataset = DatasetMemorizer("./dataset1",batch_size=2)
+    # generate_dataset_simple('./dataset6',"/home/projectrobal/data/vbr_slam/colosseo/colosseo_train0/colosseo_train0_gt.txt",
+    #                  "/home/projectrobal/data/colosseo0_kitti/camera_left/data")
+    # # # test split points
+    # exit()
+    dataset = DatasetMemorizer("./dataset5",batch_size=2)
 
     print("Preloading dataset start")
 
@@ -384,15 +496,48 @@ def main():
 
     print("Preloading dataset finished")
 
-    net = MapMemorizer(20)
+    net = MapMemorizer(5)
 
     net = net.to(device=device)
     
+    net.load_state_dict(torch.load('./traininig/checkpoint_11_03_2026.pt',weights_only=True))
+    
+    # loss_fn = ChamferDistance()
+    
+    # x,y,l = dataset[0]
+    
+    # x = x.to(device)
+    # y = y.to(device)
+    
+    # with torch.no_grad():
+    #     out = net.forward(x)
+        
+    #     print(out.shape)
+        
+    #     cloud = out
+        
+    #     output_cloud = o3d.geometry.PointCloud()
+    #     output_cloud.points = o3d.utility.Vector3dVector(
+    #         cloud[0].cpu().numpy()
+    #     )
+        
+    #     output_cloud1 = o3d.geometry.PointCloud()
+    #     output_cloud1.points = o3d.utility.Vector3dVector(
+    #         y[0].cpu().numpy()
+    #     )
+        
+        
+    #     print("Loss: ",loss_fn(y,out))
+        
+    #     print(np.array(output_cloud.points[:l[0]]))
+    #     print(np.array(output_cloud1.points[:l[0]]))
+        
+    #     o3d.visualization.draw_geometries([output_cloud])
+    
     print("Test training")
     
-    # input()
+    # # input()
     net.fit(40,dataset,"./checkpoint.pt")
-
 
 if __name__ == "__main__":
     main()

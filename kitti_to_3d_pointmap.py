@@ -78,13 +78,13 @@ def quaternion_to_matrix(q):
 def main():    
     # timestamp 
     pcd = o3d.geometry.PointCloud()
-    pcd = o3d.io.read_point_cloud("point_cloud_1.ply")
+    pcd = o3d.io.read_point_cloud("point_cloud_2.ply")
     
-    pcd.points = pcd.points[0::256]
+    pcd.points = pcd.points[0::8]
     
     print(f"Point count: {len(pcd.points)}")
     
-    o3d.io.write_point_cloud("point_cloud_2.ply",pcd)
+    o3d.io.write_point_cloud("point_cloud_3.ply",pcd)
     
     o3d.visualization.draw_geometries([pcd])
     exit()
